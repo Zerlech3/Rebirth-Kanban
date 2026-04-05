@@ -39,7 +39,7 @@ const BG_GRADIENTS = [
   'linear-gradient(135deg, #1e3a5f 0%, #0f766e 100%)',
 ]
 
-export default function BoardMenu({ board, labels: initialLabels, currentUserId, onClose }: BoardMenuProps) {
+export default function BoardMenu({ board, labels: initialLabels, currentUserId: _currentUserId, onClose }: BoardMenuProps) {
   const [panel, setPanel] = useState<Panel>(null)
   const [labels, setLabels] = useState<Label[]>(initialLabels)
   const [newLabelName, setNewLabelName] = useState('')
