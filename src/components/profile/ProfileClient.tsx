@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
-import { Camera, Loader2, Lock, Bell, User as UserIcon } from 'lucide-react'
+import { Camera, Loader2, Lock, Bell, User as UserIcon, Trash2, ZoomIn } from 'lucide-react'
 
 interface ProfileClientProps {
   profile: User | null
@@ -30,6 +30,8 @@ export default function ProfileClient({ profile, preferences }: ProfileClientPro
   const [avatarUrl, setAvatarUrl] = useState(profile?.avatar_url ?? '')
   const [savingProfile, setSavingProfile] = useState(false)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -48,20 +50,58 @@ export default function ProfileClient({ profile, preferences }: ProfileClientPro
     .toUpperCase()
     .slice(0, 2) || 'U'
 
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Görseli kare kırp ve 400x400'e küçült
+  const resizeToSquare = (file: File, maxPx = 400): Promise<Blob> =>
+    new Promise((resolve, reject) => {
+      const img = new Image()
+      const url = URL.createObjectURL(file)
+      img.onload = () => {
+        URL.revokeObjectURL(url)
+        const size = Math.min(img.width, img.height, maxPx)
+        const canvas = document.createElement('canvas')
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')!
+        const sx = (img.width - Math.min(img.width, img.height)) / 2
+        const sy = (img.height - Math.min(img.width, img.height)) / 2
+        const srcSize = Math.min(img.width, img.height)
+        ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, size, size)
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Canvas boş')), 'image/jpeg', 0.88)
+      }
+      img.onerror = reject
+      img.src = url
+    })
+
+  // Dosya seçilince kırp ve önizle (henüz yükleme yok)
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file || !userId) return
+    if (!file) return
+    e.target.value = ''
+    try {
+      const blob = await resizeToSquare(file, 400)
+      const url = URL.createObjectURL(blob)
+      setPreviewBlob(blob)
+      setPreviewUrl(url)
+    } catch {
+      toast.error('Görsel işlenemedi')
+    }
+  }
+
+  // Önizleme onaylandıktan sonra gerçek yükleme
+  const handleConfirmUpload = async () => {
+    if (!previewBlob || !userId) return
     setUploadingAvatar(true)
 
-    const ext = file.name.split('.').pop()
-    const path = `${userId}/avatar.${ext}`
+    // Bucket'ı hazırla
+    await fetch('/api/storage/init', { method: 'POST' })
 
+    const path = `${userId}/avatar.jpg`
     const { error: uploadError } = await supabase.storage
       .from('avatars')
-      .upload(path, file, { upsert: true })
+      .upload(path, previewBlob, { upsert: true, contentType: 'image/jpeg' })
 
     if (uploadError) {
-      toast.error('Avatar yüklenemedi')
+      toast.error('Avatar yüklenemedi: ' + uploadError.message)
       setUploadingAvatar(false)
       return
     }
@@ -70,18 +110,35 @@ export default function ProfileClient({ profile, preferences }: ProfileClientPro
     const cacheBusted = `${publicUrl}?t=${Date.now()}`
 
     const { error: updateError } = await supabase
-      .from('users')
-      .update({ avatar_url: cacheBusted })
-      .eq('id', userId)
+      .from('users').update({ avatar_url: cacheBusted }).eq('id', userId)
 
     if (updateError) {
-      toast.error('Avatar URL güncellenemedi')
+      toast.error('Avatar kaydedilemedi')
     } else {
       setAvatarUrl(cacheBusted)
       if (authUser) setUser({ ...authUser, avatar_url: cacheBusted })
-      toast.success('Avatar güncellendi')
+      toast.success('Profil fotoğrafı güncellendi')
     }
     setUploadingAvatar(false)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewBlob(null)
+    setPreviewUrl(null)
+  }
+
+  const handleCancelPreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewBlob(null)
+    setPreviewUrl(null)
+  }
+
+  // Fotoğrafı kaldır
+  const handleRemoveAvatar = async () => {
+    if (!userId) return
+    await supabase.storage.from('avatars').remove([`${userId}/avatar.jpg`])
+    await supabase.from('users').update({ avatar_url: null }).eq('id', userId)
+    setAvatarUrl('')
+    if (authUser) setUser({ ...authUser, avatar_url: null })
+    toast.success('Profil fotoğrafı kaldırıldı')
   }
 
   const handleSaveProfile = async () => {
@@ -174,32 +231,64 @@ export default function ProfileClient({ profile, preferences }: ProfileClientPro
           <div className="space-y-6">
             {/* Avatar */}
             <div className="flex items-center gap-5">
-              <div className="relative">
-                <Avatar className="w-20 h-20">
-                  <AvatarImage src={avatarUrl} />
+              <div className="relative group">
+                <Avatar className="w-20 h-20 ring-2 ring-offset-2 ring-transparent group-hover:ring-blue-400 transition-all">
+                  <AvatarImage src={avatarUrl} className="object-cover" />
                   <AvatarFallback className="text-xl bg-blue-600 text-white">{initials}</AvatarFallback>
                 </Avatar>
-                <label className="absolute bottom-0 right-0 w-7 h-7 bg-gray-800 rounded-full flex items-center justify-center cursor-pointer hover:bg-gray-700 transition-colors">
+                <label className="absolute bottom-0 right-0 w-7 h-7 bg-gray-800 dark:bg-gray-700 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors shadow-md">
                   {uploadingAvatar ? (
                     <Loader2 className="w-3.5 h-3.5 text-white animate-spin" />
                   ) : (
                     <Camera className="w-3.5 h-3.5 text-white" />
                   )}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleAvatarUpload}
-                    disabled={uploadingAvatar}
-                  />
+                  <input type="file" accept="image/*" className="hidden" onChange={handleFileSelected} disabled={uploadingAvatar} />
                 </label>
               </div>
               <div>
                 <p className="font-semibold text-gray-800 dark:text-gray-200">{fullName || 'İsimsiz'}</p>
                 <p className="text-sm text-gray-500">{profile?.email}</p>
-                <p className="text-xs text-gray-400 mt-0.5">Profil fotoğrafı yüklemek için tıklayın</p>
+                <div className="flex items-center gap-3 mt-1.5">
+                  <label className="text-xs text-blue-500 hover:underline cursor-pointer flex items-center gap-1">
+                    <ZoomIn className="w-3 h-3" /> Fotoğraf değiştir
+                    <input type="file" accept="image/*" className="hidden" onChange={handleFileSelected} disabled={uploadingAvatar} />
+                  </label>
+                  {avatarUrl && (
+                    <button
+                      onClick={handleRemoveAvatar}
+                      className="text-xs text-red-400 hover:underline flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" /> Kaldır
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
+
+            {/* Önizleme Modal */}
+            {previewUrl && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 w-72 text-center space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">Profil Fotoğrafı Önizleme</h3>
+                  <div className="flex justify-center">
+                    <div className="w-32 h-32 rounded-full overflow-hidden ring-4 ring-blue-400 shadow-lg">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={previewUrl} alt="Önizleme" className="w-full h-full object-cover" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400">Fotoğrafınız otomatik olarak kare kırpıldı. Nasıl görünüyor?</p>
+                  <div className="flex gap-3">
+                    <Button variant="ghost" size="sm" className="flex-1" onClick={handleCancelPreview}>
+                      İptal
+                    </Button>
+                    <Button size="sm" className="flex-1" onClick={handleConfirmUpload} disabled={uploadingAvatar}>
+                      {uploadingAvatar && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                      Kaydet
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Fields */}
             <div className="grid grid-cols-2 gap-4">

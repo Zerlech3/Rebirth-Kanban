@@ -51,7 +51,7 @@ export default function CardItem({ card, labels, onClick }: CardItemProps) {
     <div
       onClick={onClick}
       className={cn(
-        'bg-white dark:bg-gray-700 rounded-lg shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-gray-200 dark:border-gray-600',
+        'bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 cursor-pointer border border-gray-200/80 dark:border-gray-700/80 group',
         card.priority !== 'normal' && `border-l-4 ${priorityBorderColors[card.priority]}`
       )}
     >
@@ -125,12 +125,28 @@ export default function CardItem({ card, labels, onClick }: CardItemProps) {
               {card.members.slice(0, 3).map((m) => (
                 <div
                   key={m.user_id}
-                  className="w-6 h-6 rounded-full bg-blue-500 border-2 border-white dark:border-gray-700 flex items-center justify-center text-white text-[9px] font-bold"
+                  className="w-6 h-6 rounded-full border-2 border-white dark:border-gray-700 overflow-hidden bg-blue-500 flex-shrink-0"
                   title={m.user?.full_name}
                 >
-                  {m.user?.full_name?.charAt(0).toUpperCase() ?? '?'}
+                  {m.user?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={m.user.avatar_url}
+                      alt={m.user.full_name ?? ''}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-white text-[9px] font-bold">
+                      {m.user?.full_name?.charAt(0).toUpperCase() ?? '?'}
+                    </div>
+                  )}
                 </div>
               ))}
+              {card.members.length > 3 && (
+                <div className="w-6 h-6 rounded-full border-2 border-white dark:border-gray-700 bg-gray-400 flex items-center justify-center text-white text-[9px] font-bold">
+                  +{card.members.length - 3}
+                </div>
+              )}
             </div>
           )}
         </div>

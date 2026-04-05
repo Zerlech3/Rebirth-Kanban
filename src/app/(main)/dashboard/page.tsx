@@ -80,54 +80,32 @@ export default async function DashboardPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-5 sm:space-y-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
       </div>
 
       {/* İstatistik kartları */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-                <CheckSquare className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
+        {[
+          { icon: CheckSquare, color: 'blue', count: activeCards.length, label: 'Atanan Kart' },
+          { icon: Clock, color: 'orange', count: upcomingCards.length, label: 'Yaklaşan' },
+          { icon: AlertTriangle, color: 'red', count: overdueCards.length, label: 'Geciken' },
+        ].map(({ icon: Icon, color, count, label }) => (
+          <Card key={label}>
+            <CardContent className="p-3 sm:pt-6 sm:px-4">
+              <div className="flex flex-col sm:flex-row items-center sm:items-center gap-1 sm:gap-3">
+                <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-${color}-100 dark:bg-${color}-900/30 flex items-center justify-center flex-shrink-0`}>
+                  <Icon className={`w-4 h-4 sm:w-5 sm:h-5 text-${color}-600 dark:text-${color}-400`} />
+                </div>
+                <div className="text-center sm:text-left">
+                  <p className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">{count}</p>
+                  <p className="text-xs sm:text-sm text-gray-500">{label}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">{activeCards.length}</p>
-                <p className="text-sm text-gray-500">Atanan Kart</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">{upcomingCards.length}</p>
-                <p className="text-sm text-gray-500">Yaklaşan Tarih</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">{overdueCards.length}</p>
-                <p className="text-sm text-gray-500">Geciken Kart</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -141,7 +119,7 @@ export default async function DashboardPage() {
           </div>
 
           {starredBoards && starredBoards.length > 0 ? (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-2 gap-3">
               {starredBoards.map((board) => (
                 <Link key={board.id} href={`/board/${board.id}`}>
                   <div className="group relative h-24 rounded-xl overflow-hidden cursor-pointer hover:scale-[1.02] transition-transform">

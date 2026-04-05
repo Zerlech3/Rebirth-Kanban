@@ -7,6 +7,9 @@ import { createClient } from '@/lib/supabase/client'
 import ListColumn from '../../list/ListColumn'
 import AddListButton from '../../list/AddListButton'
 import { toast } from 'sonner'
+import { BoardFilters } from '../BoardClient'
+import { useRealtimeBoard } from '@/hooks/useRealtimeBoard'
+import { useRef, useCallback } from 'react'
 
 interface KanbanViewProps {
   lists: List[]
@@ -14,11 +17,39 @@ interface KanbanViewProps {
   labels: Label[]
   currentUserId: string
   boardMembers: BoardMember[]
+  filters: BoardFilters
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function KanbanView({ lists: _lists, boardId, labels, currentUserId, boardMembers }: KanbanViewProps) {
+export default function KanbanView({ lists: _lists, boardId, labels, currentUserId, boardMembers, filters }: KanbanViewProps) {
   const { moveCard, moveList, lists: storeLists } = useBoardStore()
+  useRealtimeBoard(boardId)
+
+  // Drag-to-scroll on empty board background
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
+
+  const onBoardMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Only activate when clicking the scrollable container itself (empty board background)
+    // not on child elements (lists, cards, buttons)
+    const target = e.target as HTMLElement
+    if (target !== scrollRef.current) return
+    dragState.current = { active: true, startX: e.clientX, scrollLeft: scrollRef.current!.scrollLeft }
+    scrollRef.current!.style.cursor = 'grabbing'
+    scrollRef.current!.style.userSelect = 'none'
+  }, [])
+
+  const onBoardMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragState.current.active || !scrollRef.current) return
+    const dx = e.clientX - dragState.current.startX
+    scrollRef.current.scrollLeft = dragState.current.scrollLeft - dx
+  }, [])
+
+  const onBoardMouseUp = useCallback(() => {
+    if (!dragState.current.active || !scrollRef.current) return
+    dragState.current.active = false
+    scrollRef.current.style.cursor = ''
+    scrollRef.current.style.userSelect = ''
+  }, [])
 
   const onDragEnd = async (result: DropResult) => {
     const { source, destination, type } = result
@@ -109,9 +140,16 @@ export default function KanbanView({ lists: _lists, boardId, labels, currentUser
       <Droppable droppableId="board" type="LIST" direction="horizontal">
         {(provided) => (
           <div
-            ref={provided.innerRef}
+            ref={(el) => {
+              provided.innerRef(el)
+              ;(scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+            }}
             {...provided.droppableProps}
             className="flex gap-3 h-full overflow-x-auto p-4 items-start"
+            onMouseDown={onBoardMouseDown}
+            onMouseMove={onBoardMouseMove}
+            onMouseUp={onBoardMouseUp}
+            onMouseLeave={onBoardMouseUp}
           >
             {storeLists.map((list, index) => (
               <Draggable key={list.id} draggableId={list.id} index={index}>
@@ -127,6 +165,7 @@ export default function KanbanView({ lists: _lists, boardId, labels, currentUser
                       labels={labels}
                       currentUserId={currentUserId}
                       boardMembers={boardMembers}
+                      filters={filters}
                     />
                   </div>
                 )}

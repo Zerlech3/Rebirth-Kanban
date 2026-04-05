@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Workspace, Board, WorkspaceMember } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -27,6 +27,39 @@ interface WorkspaceClientProps {
 
 const BG_COLORS = ['#0079bf', '#d29034', '#519839', '#b04632', '#89609e', '#cd5a91']
 
+const BOARD_TEMPLATES = [
+  {
+    id: 'blank',
+    label: 'Boş Board',
+    description: 'Sıfırdan başla',
+    lists: [],
+  },
+  {
+    id: 'musteri_projesi',
+    label: 'Müşteri Projesi',
+    description: 'Briefing → Analiz → Uygulama → Review → Teslim',
+    lists: ['Briefing', 'Analiz', 'Uygulama', 'Review', 'Teslim'],
+  },
+  {
+    id: 'haftalik_sprint',
+    label: 'Haftalık Sprint',
+    description: 'Backlog → Bu Hafta → Devam Eden → Test → Tamamlandı',
+    lists: ['Backlog', 'Bu Hafta', 'Devam Eden', 'Test', 'Tamamlandı'],
+  },
+  {
+    id: 'crm',
+    label: 'Müşteri İlişkileri (CRM)',
+    description: 'Potansiyel → İlk Görüşme → Teklif → Anlaşma → Aktif Müşteri',
+    lists: ['Potansiyel', 'İlk Görüşme', 'Teklif', 'Anlaşma', 'Aktif Müşteri'],
+  },
+  {
+    id: 'ic_operasyon',
+    label: 'İç Operasyon',
+    description: 'Yapılacak → Devam Eden → Beklemede → Tamamlandı',
+    lists: ['Yapılacak', 'Devam Eden', 'Beklemede', 'Tamamlandı'],
+  },
+]
+
 export default function WorkspaceClient({
   workspace,
   boards: initialBoards,
@@ -35,6 +68,8 @@ export default function WorkspaceClient({
   isOwner,
 }: WorkspaceClientProps) {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const activeTab = searchParams.get('tab') || 'boards'
   const [boards, setBoards] = useState<Board[]>(initialBoards)
   const [members, setMembers] = useState<WorkspaceMember[]>(initialMembers)
 
@@ -43,6 +78,7 @@ export default function WorkspaceClient({
   const [newBoardTitle, setNewBoardTitle] = useState('')
   const [newBoardBg, setNewBoardBg] = useState(BG_COLORS[0])
   const [newBoardVisibility, setNewBoardVisibility] = useState<'private' | 'workspace' | 'public'>('workspace')
+  const [selectedTemplate, setSelectedTemplate] = useState('blank')
   const [creatingBoard, setCreatingBoard] = useState(false)
 
   // Invite modal state
@@ -87,10 +123,23 @@ export default function WorkspaceClient({
         role: 'admin',
       })
 
+      // Şablon listelerini oluştur
+      const template = BOARD_TEMPLATES.find((t) => t.id === selectedTemplate)
+      if (template && template.lists.length > 0) {
+        await supabase.from('lists').insert(
+          template.lists.map((title, position) => ({
+            board_id: newBoard.id,
+            title,
+            position,
+          }))
+        )
+      }
+
       setBoards((prev) => [newBoard, ...prev])
       setNewBoardTitle('')
       setNewBoardBg(BG_COLORS[0])
       setNewBoardVisibility('workspace')
+      setSelectedTemplate('blank')
       setCreateBoardOpen(false)
       toast.success('Board oluşturuldu')
     } finally {
@@ -198,7 +247,7 @@ export default function WorkspaceClient({
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6">
-        <Tabs defaultValue="boards">
+        <Tabs value={activeTab} onValueChange={(val) => router.push(`/workspace/${workspace.id}?tab=${val}`)}>
           <TabsList className="mb-6">
             {tabs.map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value} className="gap-2">
@@ -392,6 +441,26 @@ export default function WorkspaceClient({
             <DialogTitle>Yeni Board Oluştur</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
+            {/* Şablon seçimi */}
+            <div className="space-y-2">
+              <Label>Şablon</Label>
+              <div className="grid grid-cols-1 gap-1.5 max-h-44 overflow-y-auto">
+                {BOARD_TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setSelectedTemplate(t.id)}
+                    className={`text-left p-2.5 rounded-lg border-2 transition-all ${
+                      selectedTemplate === t.id
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                    }`}
+                  >
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">{t.label}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{t.description}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="board-title">Board Adı *</Label>
               <Input

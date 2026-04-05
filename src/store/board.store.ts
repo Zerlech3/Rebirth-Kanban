@@ -41,7 +41,11 @@ export const useBoardStore = create<BoardStore>((set) => ({
   setFilterPriority: (priority) => set({ filterPriority: priority }),
 
   addList: (list) =>
-    set((state) => ({ lists: [...state.lists, { ...list, cards: [] }] })),
+    set((state) => {
+      // Aynı ID'ye sahip liste zaten varsa ekleme (realtime + manuel çakışmasını önle)
+      if (state.lists.some((l) => l.id === list.id)) return state
+      return { lists: [...state.lists, { ...list, cards: list.cards ?? [] }] }
+    }),
 
   updateList: (id, data) =>
     set((state) => ({
@@ -54,7 +58,14 @@ export const useBoardStore = create<BoardStore>((set) => ({
   addCard: (listId, card) =>
     set((state) => ({
       lists: state.lists.map((l) =>
-        l.id === listId ? { ...l, cards: [...(l.cards || []), card] } : l
+        l.id === listId
+          ? {
+              ...l,
+              cards: (l.cards || []).some((c) => c.id === card.id)
+                ? l.cards
+                : [...(l.cards || []), card],
+            }
+          : l
       ),
     })),
 

@@ -45,7 +45,7 @@ export default function Header({ user }: HeaderProps) {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
     if (searchQuery.trim()) {
-      router.push(`/dashboard?search=${encodeURIComponent(searchQuery.trim())}`)
+      router.push(`/search?q=${encodeURIComponent(searchQuery.trim())}`)
     }
   }
 
@@ -57,48 +57,42 @@ export default function Header({ user }: HeaderProps) {
     .slice(0, 2) ?? 'U'
 
   return (
-    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 h-14 flex items-center px-4 gap-4 flex-shrink-0">
+    <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-gray-200/60 dark:border-gray-700/60 h-14 flex items-center px-4 gap-4 flex-shrink-0 z-30 sticky top-0 shadow-sm">
       {/* Search */}
-      <form onSubmit={handleSearch} className="flex-1 max-w-md ml-8 lg:ml-0">
+      <form onSubmit={handleSearch} className="flex-1 max-w-sm ml-8 lg:ml-0">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
           <Input
             type="text"
             placeholder="Kart veya board ara... (/)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 h-9 text-sm bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setSearchQuery('')
-            }}
+            className="pl-9 h-8 text-sm bg-gray-100/80 dark:bg-gray-800/80 border-transparent focus:border-blue-400 rounded-full transition-all"
+            onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery('') }}
           />
         </div>
       </form>
 
-      <div className="flex items-center gap-2 ml-auto">
+      <div className="flex items-center gap-1 ml-auto">
         {/* Dark mode toggle */}
         {mounted && (
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
+            className="h-8 w-8 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             title="Tema değiştir"
           >
-            {theme === 'dark' ? (
-              <Sun className="w-4 h-4" />
-            ) : (
-              <Moon className="w-4 h-4" />
-            )}
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </Button>
         )}
 
         {/* Notifications */}
         <Link href="/notifications">
-          <Button variant="ghost" size="icon" className="h-9 w-9 relative" title="Bildirimler">
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full relative text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800" title="Bildirimler">
             <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
@@ -107,10 +101,10 @@ export default function Header({ user }: HeaderProps) {
 
         {/* User menu */}
         <DropdownMenu>
-          <DropdownMenuTrigger className="rounded-full outline-none focus:ring-2 focus:ring-blue-500">
-            <Avatar className="h-8 w-8 cursor-pointer">
-              <AvatarImage src={user?.avatar_url ?? ''} alt={user?.full_name ?? ''} />
-              <AvatarFallback className="bg-blue-600 text-white text-xs">
+          <DropdownMenuTrigger className="rounded-full outline-none focus:ring-2 focus:ring-blue-500 ml-1">
+            <Avatar className="h-8 w-8 cursor-pointer ring-2 ring-transparent hover:ring-blue-400 transition-all">
+              <AvatarImage src={user?.avatar_url ?? ''} alt={user?.full_name ?? ''} className="object-cover" />
+              <AvatarFallback className="bg-gradient-to-br from-blue-500 to-violet-600 text-white text-xs font-semibold">
                 {initials}
               </AvatarFallback>
             </Avatar>

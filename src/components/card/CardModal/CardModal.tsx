@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Card, Label, BoardMember, Checklist, ChecklistItem, Comment, Activity, CardRelation, RelationType } from '@/types'
 import { createClient } from '@/lib/supabase/client'
 import { useBoardStore } from '@/store/board.store'
@@ -16,12 +16,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'sonner'
 import {
   Edit2, Users, Tag, Clock, AlignLeft, CheckSquare, Paperclip,
-  MessageSquare, Activity as ActivityIcon, Archive, Copy, Loader2, Plus, Trash2, MoveRight, Link2, X
+  MessageSquare, Activity as ActivityIcon, Archive, Copy, Loader2, Plus, Trash2, MoveRight, Link2, X, LayoutTemplate
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { tr } from 'date-fns/locale'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { createNotifications } from '@/lib/createNotification'
 
 interface CardModalProps {
   cardId: string
@@ -35,7 +36,7 @@ type SidebarPanel = 'members' | 'labels' | 'duedate' | null
 
 export default function CardModal({ cardId, boardId, labels, boardMembers, onClose }: CardModalProps) {
   const supabase = createClient()
-  const { updateCard } = useBoardStore()
+  const { updateCard, addCard } = useBoardStore()
   const currentUser = useAuthStore((s) => s.user)
 
   const [card, setCard] = useState<Card | null>(null)
@@ -87,6 +88,15 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
   const [moveLists, setMoveLists] = useState<{id:string,title:string}[]>([])
   const [moving, setMoving] = useState(false)
 
+  // Attachments
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+
+  // @mention
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const commentTextareaRef = useRef<HTMLTextAreaElement>(null)
+
   // ── Task 2: Card Relations State ────────────────────────
   const [showRelationForm, setShowRelationForm] = useState(false)
   const [relationType, setRelationType] = useState<RelationType>('relates_to')
@@ -106,8 +116,7 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
         checklists(*, checklist_items(*)),
         comments(*, users(id, full_name, avatar_url)),
         attachments(*),
-        activities(*, users(id, full_name, avatar_url)),
-        card_relations(id, relation_type, related_card_id, cards!card_relations_related_card_id_fkey(id, title))
+        activities(*, users(id, full_name, avatar_url))
       `)
       .eq('id', cardId)
       .single()
@@ -116,6 +125,35 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
       toast.error('Kart yüklenemedi')
       setLoading(false)
       return
+    }
+
+    // card_relations ayrı query ile yükle (tablo yoksa hata sessizce yok sayılır)
+    let relations: CardRelation[] = []
+    try {
+      const { data: relData } = await supabase
+        .from('card_relations')
+        .select('id, relation_type, related_card_id')
+        .eq('card_id', cardId)
+      if (relData && relData.length > 0) {
+        // İlişkili kart başlıklarını tek sorguda çek
+        const relatedIds = relData.map((r: { related_card_id: string }) => r.related_card_id)
+        const { data: relatedCards } = await supabase
+          .from('cards')
+          .select('id, title')
+          .in('id', relatedIds)
+        const cardMap = Object.fromEntries((relatedCards ?? []).map((c: { id: string; title: string }) => [c.id, c]))
+        relations = relData.map((r: { id: string; relation_type: RelationType; related_card_id: string }) => ({
+          id: r.id,
+          card_id: cardId,
+          related_card_id: r.related_card_id,
+          relation_type: r.relation_type,
+          created_by: '',
+          created_at: '',
+          related_card: cardMap[r.related_card_id] ?? null,
+        }))
+      }
+    } catch {
+      // card_relations tablosu yoksa devam et
     }
 
     // Normalize joined data
@@ -137,15 +175,7 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
       activities: (data.activities ?? []).sort(
         (a: Activity, b: Activity) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       ),
-      relations: (data.card_relations ?? []).map((r: { id: string; relation_type: RelationType; related_card_id: string; cards: { id: string; title: string } }) => ({
-        id: r.id,
-        card_id: cardId,
-        related_card_id: r.related_card_id,
-        relation_type: r.relation_type,
-        created_by: '',
-        created_at: '',
-        related_card: r.cards,
-      })) as CardRelation[],
+      relations,
     }
 
     setCard(normalized)
@@ -327,6 +357,15 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
               }
             : prev
         )
+        // Bildirim: atanan kişiye (kendisi atıyorsa gönderme)
+        if (memberId !== currentUser?.id) {
+          await createNotifications([memberId], {
+            type: 'card_assigned',
+            title: 'Karta atandınız',
+            message: `${currentUser?.full_name ?? 'Biri'} sizi "${card?.title}" kartına atadı`,
+            linkUrl: `/board/${boardId}`,
+          })
+        }
       }
     }
   }
@@ -411,6 +450,18 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
     setCard((prev) => prev ? { ...prev, comments: [...(prev.comments ?? []), data] } : prev)
     setNewComment('')
     await logActivity('add_comment', 'Yorum eklendi')
+    // Bildirim: kart üyelerine (yorum yapan hariç)
+    const memberIds = (card?.members ?? [])
+      .map((m) => m.user_id)
+      .filter((id) => id !== currentUser.id)
+    if (memberIds.length > 0) {
+      await createNotifications(memberIds, {
+        type: 'card_comment',
+        title: 'Yeni yorum',
+        message: `${currentUser.full_name} "${card?.title}" kartına yorum ekledi`,
+        linkUrl: `/board/${boardId}`,
+      })
+    }
   }
 
   const handleDeleteComment = async (commentId: string) => {
@@ -451,9 +502,41 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
     onClose()
   }
 
+  // ── Save as Template ───────────────────────────────────
+  const handleSaveAsTemplate = async () => {
+    if (!card) return
+    let userId = currentUser?.id
+    if (!userId) {
+      const { data: { user: su } } = await supabase.auth.getUser()
+      userId = su?.id
+    }
+    if (!userId) { toast.error('Oturum bilgisi alınamadı'); return }
+
+    const checklistData = (card.checklists ?? []).map((cl) => ({
+      title: cl.title,
+      items: (cl.items ?? []).map((item) => ({ title: item.title })),
+    }))
+
+    const { error } = await supabase.from('card_templates').insert({
+      title: card.title,
+      description: card.description,
+      checklist_data: checklistData,
+      created_by: userId,
+    })
+    if (error) { toast.error('Şablon kaydedilemedi: ' + error.message); return }
+    toast.success(`"${card.title}" şablon olarak kaydedildi`)
+  }
+
   // ── Copy Card ──────────────────────────────────────────
   const handleCopyCard = async () => {
     if (!card) return
+    // currentUser store'dan null gelebilir, session'dan fallback al
+    let userId = currentUser?.id
+    if (!userId) {
+      const { data: { user: sessionUser } } = await supabase.auth.getUser()
+      userId = sessionUser?.id
+    }
+    if (!userId) { toast.error('Oturum bilgisi alınamadı'); return }
     const { data, error } = await supabase
       .from('cards')
       .insert({
@@ -461,12 +544,13 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
         title: `${card.title} (Kopya)`,
         description: card.description,
         priority: card.priority,
-        position: (card.position ?? 0) + 0.5,
-        created_by: currentUser?.id,
+        position: (card.position ?? 0) + 1,
+        created_by: userId,
       })
       .select()
       .single()
-    if (error) { toast.error('Kart kopyalanamadı'); return }
+    if (error) { toast.error('Kart kopyalanamadı: ' + error.message); return }
+    addCard(card.list_id, data)
     toast.success('Kart kopyalandı')
     await logActivity('copy_card', `"${card.title}" kartı kopyalandı`, { new_card_id: data.id })
   }
@@ -491,15 +575,33 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
   }
 
   // ── Task 2: Add Relation ───────────────────────────────
+  const reverseRelationType = (type: RelationType): RelationType => {
+    if (type === 'blocks') return 'blocked_by'
+    if (type === 'blocked_by') return 'blocks'
+    return type // relates_to ve duplicates simetriktir
+  }
+
   const handleAddRelation = async () => {
     if (!selectedRelatedCard) { toast.error('Lütfen bir kart seçin'); return }
+    const userId = currentUser?.id
+
+    // A → B
     const { error } = await supabase.from('card_relations').insert({
       card_id: cardId,
       related_card_id: selectedRelatedCard.id,
       relation_type: relationType,
-      created_by: currentUser?.id,
+      created_by: userId,
     })
     if (error) { toast.error('İlişki eklenemedi'); return }
+
+    // B → A (ters yön, zaten varsa ignore et)
+    await supabase.from('card_relations').insert({
+      card_id: selectedRelatedCard.id,
+      related_card_id: cardId,
+      relation_type: reverseRelationType(relationType),
+      created_by: userId,
+    })
+
     toast.success('İlişki eklendi')
     setShowRelationForm(false)
     setRelationSearch('')
@@ -510,9 +612,75 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
   }
 
   const handleDeleteRelation = async (relationId: string) => {
+    // Silinecek ilişkiyi bul (ters yönünü de silmek için)
+    const rel = card?.relations?.find((r) => r.id === relationId)
     const { error } = await supabase.from('card_relations').delete().eq('id', relationId)
     if (error) { toast.error('İlişki silinemedi'); return }
+
+    // Ters yönü de sil (B kartındaki A→B kaydı)
+    if (rel) {
+      await supabase
+        .from('card_relations')
+        .delete()
+        .eq('card_id', rel.related_card_id)
+        .eq('related_card_id', cardId)
+    }
+
     setCard((prev) => prev ? { ...prev, relations: (prev.relations ?? []).filter((r) => r.id !== relationId) } : prev)
+  }
+
+  // ── Attachment handlers ──────────────────────────────
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // userId: store'dan veya session'dan al
+    let userId = currentUser?.id
+    if (!userId) {
+      const { data: { user: sessionUser } } = await supabase.auth.getUser()
+      userId = sessionUser?.id
+    }
+    if (!userId) { toast.error('Oturum bilgisi alınamadı'); return }
+
+    if (file.size > 10 * 1024 * 1024) { toast.error('Dosya boyutu 10MB\'dan büyük olamaz'); return }
+    setUploading(true)
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const path = `cards/${cardId}/${Date.now()}_${safeName}`
+
+      // Bucket'ı server-side (service role) ile oluştur/public yap
+      const initRes = await fetch('/api/storage/init', { method: 'POST' })
+      if (!initRes.ok) {
+        const initErr = await initRes.json().catch(() => ({}))
+        toast.error('Storage hazırlanamadı: ' + (initErr.error ?? 'Bilinmeyen hata'))
+        return
+      }
+
+      const { error: uploadError } = await supabase.storage.from('attachments').upload(path, file, { upsert: false })
+      if (uploadError) { toast.error('Dosya yüklenemedi: ' + uploadError.message); return }
+
+      const { data: { publicUrl } } = supabase.storage.from('attachments').getPublicUrl(path)
+      const { data, error } = await supabase
+        .from('attachments')
+        .insert({ card_id: cardId, user_id: userId, file_name: file.name, file_url: publicUrl, file_size: file.size, file_type: file.type })
+        .select().single()
+      if (error) { toast.error('Ek kaydedilemedi: ' + error.message); return }
+      setCard((prev) => prev ? { ...prev, attachments: [...(prev.attachments ?? []), data] } : prev)
+      toast.success('Dosya yüklendi')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleDeleteAttachment = async (attId: string, fileUrl: string) => {
+    try {
+      const urlParts = fileUrl.split('/object/public/attachments/')
+      if (urlParts[1]) await supabase.storage.from('attachments').remove([urlParts[1]])
+    } catch { /* storage hatası kritik değil */ }
+    await supabase.from('attachments').delete().eq('id', attId)
+    setCard((prev) => prev ? { ...prev, attachments: (prev.attachments ?? []).filter((a) => a.id !== attId) } : prev)
+    toast.success('Ek silindi')
   }
 
   // ─────────────────────────────────────────────────────
@@ -548,8 +716,9 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent
         showCloseButton={false}
-        className="max-w-3xl w-full p-0 overflow-hidden max-h-[90vh] flex flex-col"
+        className="w-full max-w-none sm:max-w-2xl md:max-w-3xl p-0 overflow-hidden max-h-[100dvh] sm:max-h-[90vh] flex flex-col sm:rounded-xl rounded-none"
       >
+        <DialogTitle className="sr-only">{card?.title ?? 'Kart Detayı'}</DialogTitle>
         {loading ? (
           <div className="flex items-center justify-center h-64">
             <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
@@ -557,9 +726,9 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
         ) : !card ? (
           <div className="p-8 text-center text-gray-500">Kart bulunamadı.</div>
         ) : (
-          <div className="flex flex-1 overflow-hidden">
+          <div className="flex flex-col sm:flex-row flex-1 overflow-hidden">
             {/* ── Left Column ───────────────────────────────── */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
               {/* Title */}
               <div className="flex items-start gap-2">
                 <Edit2 className="w-4 h-4 text-gray-400 mt-1 flex-shrink-0" />
@@ -864,32 +1033,63 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
               )}
 
               {/* Attachments */}
-              {(card.attachments ?? []).length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Paperclip className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Ekler</span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {(card.attachments ?? []).map((att) => (
-                      <div key={att.id} className="flex items-center gap-2 text-sm">
-                        <Paperclip className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                        <a
-                          href={att.file_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-500 hover:underline truncate"
-                        >
-                          {att.file_name}
-                        </a>
-                        <span className="text-xs text-gray-400 ml-auto flex-shrink-0">
-                          {(att.file_size / 1024).toFixed(0)} KB
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Paperclip className="w-4 h-4 text-gray-400" />
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
+                    Ekler {(card.attachments ?? []).length > 0 && `(${(card.attachments ?? []).length})`}
+                  </span>
+                  <button
+                    onClick={() => !uploading && fileInputRef.current?.click()}
+                    className="ml-auto text-xs text-blue-500 hover:underline flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> Ekle
+                  </button>
                 </div>
-              )}
+                {(card.attachments ?? []).length === 0 ? (
+                  <p className="text-xs text-gray-400 italic">Henüz ek yok</p>
+                ) : (
+                  <div className="space-y-2">
+                    {(card.attachments ?? []).map((att) => {
+                      const isImage = att.file_type?.startsWith('image/')
+                      return (
+                        <div key={att.id} className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg group">
+                          {isImage ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={att.file_url} alt={att.file_name} className="w-10 h-10 object-cover rounded flex-shrink-0" />
+                          ) : (
+                            <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center flex-shrink-0">
+                              <Paperclip className="w-4 h-4 text-gray-400" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <a
+                              href={att.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-blue-500 hover:underline truncate block"
+                            >
+                              {att.file_name}
+                            </a>
+                            <span className="text-xs text-gray-400">
+                              {att.file_size < 1024 * 1024
+                                ? `${(att.file_size / 1024).toFixed(0)} KB`
+                                : `${(att.file_size / (1024 * 1024)).toFixed(1)} MB`}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteAttachment(att.id, att.file_url)}
+                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all flex-shrink-0"
+                            title="Sil"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
 
               {/* Comments */}
               <div>
@@ -965,14 +1165,77 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
                       {currentUser?.full_name?.charAt(0).toUpperCase() ?? 'U'}
                     </AvatarFallback>
                   </Avatar>
-                  <div className="flex-1 space-y-1.5">
+                  <div className="flex-1 space-y-1.5 relative">
                     <Textarea
+                      ref={commentTextareaRef}
                       value={newComment}
-                      onChange={(e) => setNewComment(e.target.value)}
-                      placeholder="Yorum ekle..."
+                      onChange={(e) => {
+                        const val = e.target.value
+                        setNewComment(val)
+                        // @mention tetikleyici
+                        const cursor = e.target.selectionStart
+                        const textBeforeCursor = val.slice(0, cursor)
+                        const match = textBeforeCursor.match(/@(\w*)$/)
+                        if (match) {
+                          setMentionQuery(match[1])
+                          setMentionOpen(true)
+                        } else {
+                          setMentionOpen(false)
+                          setMentionQuery('')
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') setMentionOpen(false)
+                        if (e.key === 'Enter' && !e.shiftKey && !mentionOpen) {
+                          e.preventDefault()
+                          handleSubmitComment()
+                        }
+                      }}
+                      placeholder="Yorum ekle... (@isim ile etiketle)"
                       rows={2}
                       className="text-sm"
                     />
+                    {/* @mention dropdown */}
+                    {mentionOpen && (
+                      <div className="absolute bottom-full left-0 mb-1 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-10 max-h-36 overflow-y-auto">
+                        {boardMembers
+                          .filter((m) => m.user?.full_name?.toLowerCase().includes(mentionQuery.toLowerCase()))
+                          .map((m) => (
+                            <button
+                              key={m.user_id}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700"
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                // @kısmını seçili kullanıcının adıyla değiştir
+                                const name = m.user?.full_name?.replace(/\s+/g, '') ?? m.user_id
+                                const cursor = commentTextareaRef.current?.selectionStart ?? newComment.length
+                                const before = newComment.slice(0, cursor).replace(/@\w*$/, `@${name} `)
+                                const after = newComment.slice(cursor)
+                                setNewComment(before + after)
+                                setMentionOpen(false)
+                                setMentionQuery('')
+                                // Bildirimi tetikle
+                                if (m.user_id !== currentUser?.id) {
+                                  createNotifications([m.user_id], {
+                                    type: 'card_mention',
+                                    title: 'Bir yorumda etiketlendiniz',
+                                    message: `${currentUser?.full_name ?? 'Biri'} sizi "${card?.title}" kartında etiketledi`,
+                                    linkUrl: `/board/${boardId}`,
+                                  })
+                                }
+                              }}
+                            >
+                              <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                                {m.user?.full_name?.charAt(0).toUpperCase() ?? '?'}
+                              </div>
+                              <span className="truncate">{m.user?.full_name}</span>
+                            </button>
+                          ))}
+                        {boardMembers.filter((m) => m.user?.full_name?.toLowerCase().includes(mentionQuery.toLowerCase())).length === 0 && (
+                          <p className="px-3 py-2 text-xs text-gray-400">Kullanıcı bulunamadı</p>
+                        )}
+                      </div>
+                    )}
                     <Button
                       size="sm"
                       className="h-7 text-xs"
@@ -1015,7 +1278,7 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
             </div>
 
             {/* ── Right Sidebar ─────────────────────────────── */}
-            <div className="w-48 flex-shrink-0 border-l border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 space-y-1.5 overflow-y-auto">
+            <div className="sm:w-48 flex-shrink-0 border-t sm:border-t-0 sm:border-l border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 space-y-1.5 overflow-y-auto">
               <button className="w-full text-left" onClick={onClose}>
                 <div className="flex justify-end mb-2">
                   <span className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">✕ Kapat</span>
@@ -1186,6 +1449,12 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
                 label="Kontrol Listesi"
                 onClick={() => setShowAddChecklist((p) => !p)}
               />
+              <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} accept="*/*" />
+              <SidebarButton
+                icon={uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />}
+                label={uploading ? 'Yükleniyor...' : 'Ek Ekle'}
+                onClick={() => !uploading && fileInputRef.current?.click()}
+              />
               {showAddChecklist && (
                 <div className="bg-white dark:bg-gray-700 rounded-md p-2 space-y-1.5 text-xs">
                   <Input
@@ -1204,6 +1473,11 @@ export default function CardModal({ cardId, boardId, labels, boardMembers, onClo
               )}
 
               <div className="border-t border-gray-200 dark:border-gray-600 pt-1.5 space-y-1.5">
+                <SidebarButton
+                  icon={<LayoutTemplate className="w-3.5 h-3.5" />}
+                  label="Şablon Olarak Kaydet"
+                  onClick={handleSaveAsTemplate}
+                />
                 <SidebarButton
                   icon={<Copy className="w-3.5 h-3.5" />}
                   label="Kartı Kopyala"

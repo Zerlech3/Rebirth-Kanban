@@ -12,8 +12,11 @@ import { cn } from '@/lib/utils'
 type SortField = 'title' | 'priority' | 'due_date_end' | 'list'
 type SortDir = 'asc' | 'desc'
 
+import { BoardFilters } from '../BoardClient'
+
 interface TableViewProps {
   labels: Label[]
+  filters: BoardFilters
 }
 
 const priorityOrder: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 }
@@ -25,7 +28,7 @@ const priorityColors: Record<string, string> = {
   urgent: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
 }
 
-export default function TableView({ labels }: TableViewProps) {
+export default function TableView({ labels, filters }: TableViewProps) {
   const { lists } = useBoardStore()
   const [search, setSearch] = useState('')
   const [sortField, setSortField] = useState<SortField>('list')
@@ -34,6 +37,8 @@ export default function TableView({ labels }: TableViewProps) {
   const [filterList, setFilterList] = useState<string>('')
 
   const rows = useMemo(() => {
+    const now = new Date()
+    const threeDaysLater = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
     let all: (Card & { listTitle: string })[] = []
     lists.forEach(l => {
       ;(l.cards || [])
@@ -44,6 +49,13 @@ export default function TableView({ labels }: TableViewProps) {
     if (search) all = all.filter(c => c.title.toLowerCase().includes(search.toLowerCase()))
     if (filterPriority) all = all.filter(c => c.priority === filterPriority)
     if (filterList) all = all.filter(c => c.list_id === filterList)
+    // Board-level filters
+    if (filters.labelIds.length > 0) all = all.filter(c => (c.labels ?? []).some(l => filters.labelIds.includes(l.id)))
+    if (filters.memberIds.length > 0) all = all.filter(c => (c.members ?? []).some(m => filters.memberIds.includes(m.user_id)))
+    if (filters.priority.length > 0) all = all.filter(c => filters.priority.includes(c.priority))
+    if (filters.dueDate === 'overdue') all = all.filter(c => c.due_date_end && new Date(c.due_date_end) < now)
+    if (filters.dueDate === 'upcoming') all = all.filter(c => c.due_date_end && new Date(c.due_date_end) >= now && new Date(c.due_date_end) <= threeDaysLater)
+    if (filters.dueDate === 'no_date') all = all.filter(c => !c.due_date_end)
 
     all.sort((a, b) => {
       let cmp = 0

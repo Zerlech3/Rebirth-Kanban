@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import CardItem from '../card/CardItem/CardItem'
 import CardModal from '../card/CardModal/CardModal'
-import { MoreHorizontal, Plus, GripVertical } from 'lucide-react'
+import CardTemplateModal from '../card/CardTemplateModal'
+import { MoreHorizontal, Plus, GripVertical, LayoutTemplate } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
+import { BoardFilters } from '../board/BoardClient'
 
 interface ListColumnProps {
   list: List
@@ -24,20 +26,46 @@ interface ListColumnProps {
   labels: Label[]
   currentUserId: string
   boardMembers: BoardMember[]
+  filters: BoardFilters
 }
 
-export default function ListColumn({ list, dragHandleProps, labels, currentUserId, boardMembers }: ListColumnProps) {
-  const { addCard, removeList, updateList } = useBoardStore()
+export default function ListColumn({ list, dragHandleProps, labels, currentUserId, boardMembers, filters }: ListColumnProps) {
+  const { addCard, addList, removeList, removeCard, updateList } = useBoardStore()
   const [addingCard, setAddingCard] = useState(false)
   const [newCardTitle, setNewCardTitle] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
   const [listTitle, setListTitle] = useState(list.title)
   const [selectedCard, setSelectedCard] = useState<Card | null>(null)
+  const [showTemplateModal, setShowTemplateModal] = useState(false)
   const supabase = createClient()
+
+  const now = new Date()
+  const threeDaysLater = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
 
   const activeCards = (list.cards || [])
     .filter((c) => !c.is_archived)
     .sort((a, b) => a.position - b.position)
+    .filter((c) => {
+      if (filters.labelIds.length > 0) {
+        const cardLabelIds = (c.labels ?? []).map((l) => l.id)
+        if (!filters.labelIds.some((id) => cardLabelIds.includes(id))) return false
+      }
+      if (filters.memberIds.length > 0) {
+        const cardMemberIds = (c.members ?? []).map((m) => m.user_id)
+        if (!filters.memberIds.some((id) => cardMemberIds.includes(id))) return false
+      }
+      if (filters.priority.length > 0 && !filters.priority.includes(c.priority)) return false
+      if (filters.dueDate === 'overdue') {
+        if (!c.due_date_end || new Date(c.due_date_end) >= now) return false
+      }
+      if (filters.dueDate === 'upcoming') {
+        if (!c.due_date_end) return false
+        const d = new Date(c.due_date_end)
+        if (d < now || d > threeDaysLater) return false
+      }
+      if (filters.dueDate === 'no_date' && c.due_date_end) return false
+      return true
+    })
 
   const isOverLimit = list.wip_limit !== null && activeCards.length >= list.wip_limit
 
@@ -60,10 +88,76 @@ export default function ListColumn({ list, dragHandleProps, labels, currentUserI
     setAddingCard(false)
   }
 
+  const handleCreateFromTemplate = async (template: { id: string; title: string; description: string | null; checklist_data: { title: string; items: { title: string }[] }[] }) => {
+    setShowTemplateModal(false)
+    // Kartı oluştur
+    const { data: newCard, error } = await supabase
+      .from('cards')
+      .insert({ list_id: list.id, title: template.title, description: template.description, position: activeCards.length, created_by: currentUserId })
+      .select().single()
+    if (error || !newCard) { toast.error('Şablondan kart oluşturulamadı'); return }
+    addCard(list.id, newCard)
+
+    // Kontrol listelerini oluştur
+    for (const cl of template.checklist_data ?? []) {
+      const { data: newCl } = await supabase
+        .from('checklists')
+        .insert({ card_id: newCard.id, title: cl.title, position: 0 })
+        .select().single()
+      if (!newCl) continue
+      for (let i = 0; i < cl.items.length; i++) {
+        await supabase.from('checklist_items').insert({ checklist_id: newCl.id, title: cl.items[i].title, position: i })
+      }
+    }
+    toast.success('Şablondan kart oluşturuldu')
+    setSelectedCard(newCard)
+  }
+
   const handleArchiveList = async () => {
     const { error } = await supabase.from('lists').update({ is_archived: true }).eq('id', list.id)
     if (!error) removeList(list.id)
     else toast.error('Liste arşivlenemedi')
+  }
+
+  const handleArchiveAllCards = async () => {
+    if (activeCards.length === 0) { toast.info('Listede aktif kart yok'); return }
+    const ids = activeCards.map((c) => c.id)
+    const { error } = await supabase.from('cards').update({ is_archived: true }).in('id', ids)
+    if (error) { toast.error('Kartlar arşivlenemedi'); return }
+    ids.forEach((id) => removeCard(id))
+    toast.success(`${ids.length} kart arşivlendi`)
+  }
+
+  const handleCopyList = async () => {
+    const { data: newList, error } = await supabase
+      .from('lists')
+      .insert({ board_id: list.board_id, title: `${list.title} (kopya)`, position: 9999, wip_limit: list.wip_limit })
+      .select()
+      .single()
+    if (error || !newList) { toast.error('Liste kopyalanamadı'); return }
+
+    // Store'a hemen ekle (realtime gecikmesini beklemeden)
+    addList({ ...newList, cards: [] })
+
+    // Kartları kopyala ve ID'leriyle birlikte store'a ekle
+    if (activeCards.length > 0) {
+      const cardInserts = activeCards.map((c, i) => ({
+        list_id: newList.id,
+        title: c.title,
+        description: c.description,
+        position: i,
+        priority: c.priority,
+        due_date_start: c.due_date_start,
+        due_date_end: c.due_date_end,
+        estimated_hours: c.estimated_hours,
+        created_by: currentUserId,
+      }))
+      const { data: newCards } = await supabase.from('cards').insert(cardInserts).select()
+      if (newCards) {
+        newCards.forEach((card) => addCard(newList.id, card))
+      }
+    }
+    toast.success('Liste kopyalandı')
   }
 
   const handleRenameList = async () => {
@@ -113,7 +207,11 @@ export default function ListColumn({ list, dragHandleProps, labels, currentUserI
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setAddingCard(true)}>Kart Ekle</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setEditingTitle(true)}>İsmi Değiştir</DropdownMenuItem>
-              <DropdownMenuItem onClick={handleArchiveList} className="text-red-500">Arşivle</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleCopyList}>Listeyi Kopyala</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleArchiveAllCards} className="text-orange-500">
+                Tüm Kartları Arşivle
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleArchiveList} className="text-red-500">Listeyi Arşivle</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -174,17 +272,36 @@ export default function ListColumn({ list, dragHandleProps, labels, currentUserI
             </div>
           </div>
         ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start gap-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-            onClick={() => setAddingCard(true)}
-          >
-            <Plus className="w-4 h-4" />
-            Kart ekle
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="flex-1 justify-start gap-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              onClick={() => setAddingCard(true)}
+            >
+              <Plus className="w-4 h-4" />
+              Kart ekle
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="px-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+              onClick={() => setShowTemplateModal(true)}
+              title="Şablondan oluştur"
+            >
+              <LayoutTemplate className="w-4 h-4" />
+            </Button>
+          </div>
         )}
       </div>
+
+      {/* Template Modal */}
+      {showTemplateModal && (
+        <CardTemplateModal
+          onClose={() => setShowTemplateModal(false)}
+          onSelect={handleCreateFromTemplate}
+        />
+      )}
 
       {/* Card Modal */}
       {selectedCard && (
