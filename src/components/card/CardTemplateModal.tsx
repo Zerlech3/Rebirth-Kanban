@@ -3,9 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/store/auth.store'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { toast } from 'sonner'
 import { X, CheckSquare, FileText, Search, Loader2 } from 'lucide-react'
 
 interface ChecklistItemData { title: string }

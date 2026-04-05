@@ -20,7 +20,7 @@ interface KanbanViewProps {
   filters: BoardFilters
 }
 
-export default function KanbanView({ lists: _lists, boardId, labels, currentUserId, boardMembers, filters }: KanbanViewProps) {
+export default function KanbanView({ boardId, labels, currentUserId, boardMembers, filters }: KanbanViewProps) {
   const { moveCard, moveList, lists: storeLists } = useBoardStore()
   useRealtimeBoard(boardId)
 
